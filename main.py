@@ -66,7 +66,7 @@ def main():
 
     # 4. 呼叫 Gemini 模型生成會議紀錄
     print("🧠 正在生成摘要與待辦清單...")
-    model = genai.GenerativeModel(model_name="gemini-1.5-flash")
+    model = genai.GenerativeModel(model_name="gemini-1.5-flash-latest")
     
     # 這裡的 Prompt 清楚定義了輸出的 JSON 結構
     prompt = """
