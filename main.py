@@ -5,7 +5,8 @@ import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 def main():
     print("🚀 啟動會議紀錄自動化流程...")
@@ -14,7 +15,9 @@ def main():
     gcp_sa_json = json.loads(os.environ['GCP_SERVICE_ACCOUNT'])
     drive_folder_id = os.environ['DRIVE_FOLDER_ID']
     sheet_id = os.environ['SHEET_ID']
-    genai.configure(api_key=os.environ['GEMINI_API_KEY'])
+    
+    # 使用全新版的 Client 初始化方式
+    client = genai.Client(api_key=os.environ['GEMINI_API_KEY'])
 
     # 設定 GCP 的權限範圍 (Drive 唯讀, Sheets 讀寫)
     scopes = [
@@ -49,15 +52,15 @@ def main():
             status, done = downloader.next_chunk()
             print(f"下載進度: {int(status.progress() * 100)}%")
 
-    # 3. 將影片上傳至 Gemini API
+    # 3. 將影片上傳至 Gemini API (新版寫法)
     print("📤 正在將影片上傳至 Gemini 進行分析...")
-    video_file = genai.upload_file(path="temp_video.mp4")
+    video_file = client.files.upload(file="temp_video.mp4")
     
     # 影片需要時間處理，建立等待迴圈
-    while video_file.state.name == "PROCESSING":
+    while not video_file.state or video_file.state.name == "PROCESSING":
         print(".", end="", flush=True)
         time.sleep(10)
-        video_file = genai.get_file(video_file.name)
+        video_file = client.files.get(name=video_file.name)
     print("\n✅ 影片處理完成！")
 
     if video_file.state.name == "FAILED":
@@ -66,9 +69,7 @@ def main():
 
     # 4. 呼叫 Gemini 模型生成會議紀錄
     print("🧠 正在生成摘要與待辦清單...")
-    model = genai.GenerativeModel(model_name="gemini-1.5-flash-latest")
     
-    # 這裡的 Prompt 清楚定義了輸出的 JSON 結構
     prompt = """
     這是一段 Google Meet 會議錄影。請仔細觀看並聆聽內容，然後以 JSON 格式輸出以下資訊：
     {
@@ -78,10 +79,13 @@ def main():
     }
     """
     
-    # 強制 Gemini 輸出 JSON 格式 (application/json)
-    response = model.generate_content(
-        [video_file, prompt],
-        generation_config={"response_mime_type": "application/json"}
+    # 強制 Gemini 輸出 JSON 格式 (使用最新的 2.5 Flash 模型與新版 Config)
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=[video_file, prompt],
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json"
+        )
     )
     
     result_data = json.loads(response.text)
@@ -89,9 +93,8 @@ def main():
     # 5. 將結果寫入 Google Sheets
     print("📝 正在將紀錄寫入 Google 表格...")
     gc = gspread.authorize(creds)
-    sheet = gc.open_by_key(sheet_id).sheet1  # 預設寫入第一個工作表
+    sheet = gc.open_by_key(sheet_id).sheet1 
     
-    # 假設你的表格欄位依序是：[會議日期, 會議主題, 摘要, 待辦清單, 重點紀錄]
     row_data = [
         file_date,
         file_name,
@@ -101,9 +104,9 @@ def main():
     ]
     sheet.append_row(row_data)
 
-    # 清理暫存檔案並從 Gemini 伺服器刪除影片 (保護隱私)
+    # 清理暫存檔案並從 Gemini 伺服器刪除影片
     os.remove("temp_video.mp4")
-    genai.delete_file(video_file.name)
+    client.files.delete(name=video_file.name)
     
     print("🎉 自動化流程大功告成！")
 
